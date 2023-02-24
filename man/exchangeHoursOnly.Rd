@@ -32,6 +32,7 @@ Filter raw trade data such and return only data between market close and market 
 By default, \code{marketOpen = "09:30:00"} and \code{marketClose = "16:00:00"} (see Brownlees and Gallo (2006) for more information on good choices for these arguments).
 }
 \examples{
+head(sampleTDataRaw)
 exchangeHoursOnly(sampleTDataRaw)
 }
 \references{

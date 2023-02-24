@@ -505,7 +505,28 @@ test_that("seqInclEnds gives expected result", {
   
   target <- c(1, 4, 7, 10)
   expect_equal(target, seqInclEnds(1, 10, 3))
-  
-  
-  
+})
+
+test_that("exchangeHoursOnly returns quotes data between 9:30 to 16:00 
+          for UTC timezone",{
+            target <- exchangeHoursOnly(data=sampleQDataRaw)
+            expect_equal(target, sampleQDataRawExchangeHours)
+})
+
+test_that("exchangeHoursOnly returns quotes data between 9:30 to 16:00 
+          for US/Eastern(EDT) timezone",{
+            target <- exchangeHoursOnly(data=sampleQDataRawTZ)
+            expect_equal(target, sampleQDataRawExchangeHoursTZ)
+})
+
+test_that("exchangeHoursOnly returns trades data between 9:30 to 16:00 
+          for UTC timezone",{
+            target <- exchangeHoursOnly(data=sampleTDataRawUTC)
+            expect_equal(target, sampleTDataRawExchangeHoursUTC)
+})
+
+test_that("exchangeHoursOnly returns trades data between 9:30 to 16:00 
+          for US/Eastern(EST) timezone",{
+            target <- exchangeHoursOnly(data=sampleTDataRaw)
+            expect_equal(target, sampleTDataRawExchangeHours)
 })

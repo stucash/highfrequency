@@ -787,9 +787,11 @@ autoSelectExchangeQuotes <- function(qData, printExchange = TRUE) {
 #' @references Brownlees, C. T. and Gallo, G. M. (2006). Financial econometric analysis at ultra-high frequency: Data handling concerns. Computational Statistics & Data Analysis, 51, pages 2232-2245.
 #' @author Jonathan Cornelissen, Kris Boudt, Onno Kleen, and Emil Sjoerup.
 #' @examples 
+#' head(sampleTDataRaw)
 #' exchangeHoursOnly(sampleTDataRaw)
 #' @keywords cleaning
 #' @importFrom xts tzone
+#' @importFrom lubridate force_tz
 #' @export
 exchangeHoursOnly <- function(data, marketOpen = "09:30:00", marketClose = "16:00:00", tz = NULL) {
   .N <- N <- DATE <- DT <- NULL # needed for data table (otherwise notes pop up in check())
@@ -810,23 +812,85 @@ exchangeHoursOnly <- function(data, marketOpen = "09:30:00", marketClose = "16:0
     }
   }
   
-  timeZone <- format(data$DT[1], format = "%Z")
-  if(is.null(timeZone) || timeZone == ""){
-    if(is.null(tz)){
+  # user specified tz takes precedence here.
+  if (is.null(tz)){
+    cat("\nInferring timezone information from timestamp...\n")
+    timeZone <- attr(data$DT, "tzone")
+    if (is.null(timeZone) || timeZone == ""){
       tz <- "UTC"
+      cat(" Timestamps have no timezone built-in, setting tz to UTC.\n")
+    } else {
+      tz <- timeZone
     }
-    if(!("POSIXct" %in% class(data$DT))) data[, DT := as.POSIXct(format(DT, digits = 20, nsmall = 20), tz = tz)]
-  } else {
-    tz <- timeZone
   }
+  
+  if(!("POSIXct" %in% class(data$DT))){
+    data[, DT := as.POSIXct(format(DT, 
+                                   digits = 20, 
+                                   nsmall = 20), 
+                            tz = tz)]
+  }
+  
   setkey(data, DT) # The below code MAY fail with data with unordered DT column. Also setkey inceases speed of grouping
   
-  obsPerDay <- data[, .N, by = list(DATE = as.Date(floor(as.numeric(DT, tz = tz) / 86400), origin = "1970-01-01", tz = tz))] # Dates and observations per day
+  # BUG REPORT
+  # Function `as.Date` only respects days since epoch if argument is numeric,
+  # `tz` information is ignored. It is not the case for other argument
+  # types.
+  # Example 
+  # as.POSIXct("2022-05-02 20:00:00", tz="UTC") -> utc.posixct
+  # as.POSIXct("2022-05-02 20:00:00", tz="US/Eastern") -> us.posixct 
+  # Observe that US timestamp has elapsed more seconds that UTC timestamp,
+  # given origin is 1970-01-01.
+  # as.numeric(us.posixct)
+  # > 1651536000
+  # as.numeric(utc.posixct)
+  # > 1651521600 
+  # The numeric value means the number of days since 1970-01-01, 
+  # `tz` information means nothing here.
+  # Because US timestamp has elapsed more seconds than UTC timestamp, 
+  # US's numeric value must be larger than that of UTC's.
+  # In reality, larger numeric value means sunlight comes later,
+  # meaning new day comes later. Therefore, smaller numeric value is the one
+  # embraces the new day first.
+  # `as.Date` is different: the larger number sees the new day first.
+  # Developer need to respect this fact by using `as.Data` logic in code.
+  # `highfrequency` did not do this.
+  # as.Date(as.numeric(us.posixct)/86400, origin="1970-01-01", tz="US/Eastern")
+  # "2022-05-03"
+  # as.Date(as.numeric(utc.posixct)/86400, origin="1970-01-01")
+  #"2022-05-02"
+  # Function `as.numeric` does not respect `tz` as additional argument. 
   
-  marketOpenNumeric <- as.numeric(as.POSIXct(paste(obsPerDay[[1]], marketOpen), format = "%Y-%m-%d %H:%M:%OS", tz = tz), tz = tz)
-  marketCloseNumeric <- as.numeric(as.POSIXct(paste(obsPerDay[[1]], marketClose), format = "%Y-%m-%d %H:%M:%OS", tz = tz), tz =tz)
+  # Solution 1: 
+  # This one is slow (60 milisecs) but it is argubly the most correct solution
+  # base R's `as.Date` does not respect numeric values with timezone, if there
+  # is timezone involved, a string/POSIXct/POSIXlt should be used.
+  # obsPerDay <- data[, .N, by=as.Date(DT, origin="1970-01-01", tz=tz)]
+  
+  # Solution 2:
+  # This solution is relatively faster (30 milisecs) but still slower than
+  # the original wrong implementation. 
+  # However, if it is wrong implementation, its performance isn't important.
+  # Dates and observations per day
+  if (tz != "UTC"){
+    obsPerDay <- data[, .N, by=as.Date(floor(as.numeric(force_tz(DT, tzone="UTC"))/86400),
+                                       origin="1970-01-01", 
+                                       tz=tz)]
+  } else {
+    obsPerDay <- data[, .N, by=as.Date(floor(as.numeric(DT)/86400),
+                                       origin="1970-01-01", 
+                                       tz=tz)]
+  }
+   
+  marketOpenNumeric <- as.numeric(as.POSIXct(paste(obsPerDay[[1]], marketOpen), 
+                                             format = "%Y-%m-%d %H:%M:%OS", 
+                                             tz = tz))
+  marketCloseNumeric <- as.numeric(as.POSIXct(paste(obsPerDay[[1]], marketClose), 
+                                              format = "%Y-%m-%d %H:%M:%OS", 
+                                              tz = tz))
   # marketCloseNumeric <- marketCloseNumeric + days * 86400 # 60 * 60 * 24
-  
+   
   ## Here we make sure that we can correctly handle times that happen before midnight in the corrected timestamps from the flag if statements
   if(length(marketOpenNumeric) != nrow(obsPerDay)){
     if(length(marketOpenNumeric) < nrow(obsPerDay)){ ## Here we add entries
@@ -835,7 +899,6 @@ exchangeHoursOnly <- function(data, marketOpen = "09:30:00", marketClose = "16:0
     } else { ## This shouldn't be possible but we check so we can make an error
       stop("unknown error occured in exchangeHoursOnly")
     }
-    
   }
   
   # Subset observations that does not fall between their respective market opening and market closing times.
@@ -1505,7 +1568,21 @@ quotesCleanup <- function(dataSource = NULL, dataDestination = NULL, exchanges =
     nm <- toupper(colnames(qDataRaw))
     checkqData(qDataRaw)
     if(!"DT" %in% nm && c("DATE", "TIME_M") %in% nm){
-      if(is.null(tz)) tz <- "UTC"
+      if (is.null(tz)){
+        cat("\nInferring timezone information from timestamp...\n")
+        if ("DATE" %in% nm){
+          timeZone <- attr(qDataRaw$DATE, "tzone")
+        } 
+        if ("TIME_M" %in% nm) {
+          timeZone <- attr(qDataRaw$DATE, "tzone")
+        }
+        if (is.null(timeZone) || timeZone == ""){
+          tz <- "UTC"
+          cat(" Timestamps have no timezone built-in, setting tz to UTC.\n")
+        } else {
+          tz <- timeZone
+        }
+      }
       qDataRaw[, `:=`(DT = as.POSIXct(paste(DATE, TIME_M), tz = tz, format = "%Y%m%d %H:%M:%OS"),
                       DATE = NULL, TIME_M = NULL)]
       }
@@ -1532,17 +1609,25 @@ quotesCleanup <- function(dataSource = NULL, dataDestination = NULL, exchanges =
       }
     }
     
-    timeZone <- format(qDataRaw$DT[1], format = "%Z")
-    if(is.null(timeZone) || timeZone == ""){
-      if(is.null(tz)){
+    # user specified tz takes precedence here.
+    if (is.null(tz)){
+      cat("\nInferring timezone information from timestamp...\n")
+      timeZone <- attr(qDataRaw$DT, "tzone")
+      if (is.null(timeZone) || timeZone == ""){
         tz <- "UTC"
+        cat(" Timestamps have no timezone built-in, setting tz to UTC.\n")
+      } else {
+        tz <- timeZone
       }
-      if(!("POSIXct" %in% class(qDataRaw$DT))){
-        qDataRaw[, DT := as.POSIXct(format(DT, digits = 20, nsmall = 20), tz = tz)]
-      }
-    } else {
-      tz <- timeZone
     }
+    
+    if(!("POSIXct" %in% class(qDataRaw$DT))){
+      qDataRaw[, DT := as.POSIXct(format(DT, 
+                                         digits = 20, 
+                                         nsmall = 20), 
+                                  tz = tz)]
+    }
+    
     REPORT <- c(initialObservations = 0,
                 removedFromZeroQuotes = 0, 
                 removedOutsideExchangeHours = 0,
@@ -2148,7 +2233,9 @@ tradesCleanup <- function(dataSource = NULL, dataDestination = NULL, exchanges =
       if(inherits(readdata, "try-error")){
         stop(paste("Error encountered while opening data, error message is:",readdata))
       }
-      if(is.null(tz)) tz <- "UTC"
+      if (is.null(tz)){
+        tz <- "UTC"
+      }
       if(colnames(readdata)[1] == "index"){ # The data was saved from an xts object
         readdata <- try(readdata[, DT := as.POSIXct(index, tz = tz, format = "%Y-%m-%dT%H:%M:%OS")])
       } else if ("DT" %in% colnames(readdata)){
@@ -2188,7 +2275,21 @@ tradesCleanup <- function(dataSource = NULL, dataDestination = NULL, exchanges =
     
     checktData(tDataRaw)
     if(!"DT" %in% nm && c("DATE", "TIME_M") %in% nm){
-      if(is.null(tz)) tz <- "UTC"
+      if (is.null(tz)){
+        cat("\nInferring timezone information from timestamp...\n")
+        if ("DATE" %in% nm){
+          timeZone <- attr(tDataRaw$DATE, "tzone")
+        } 
+        if ("TIME_M" %in% nm) {
+          timeZone <- attr(tDataRaw$DATE, "tzone")
+        }
+        if (is.null(timeZone) || timeZone == ""){
+          tz <- "UTC"
+          cat(" Timestamps have no timezone built-in, setting tz to UTC.\n")
+        } else {
+          tz <- timeZone
+        }
+      }
       tDataRaw[, `:=`(DT = as.POSIXct(paste(DATE, TIME_M), tz = tz, format = "%Y%m%d %H:%M:%OS"),
                       DATE = NULL, TIME_M = NULL)]
     }
@@ -2220,17 +2321,23 @@ tradesCleanup <- function(dataSource = NULL, dataDestination = NULL, exchanges =
       }
     }
     
-    
-    timeZone <- format(tDataRaw$DT[1], format = "%Z")
-    if(is.null(timeZone) || timeZone == ""){
-      if(is.null(tz)){
+    # user specified tz takes precedence here.
+    if (is.null(tz)){
+      cat("\nInferring timezone information from timestamp...\n")
+      timeZone <- attr(tDataRaw$DT, "tzone")
+      if (is.null(timeZone) || timeZone == ""){
         tz <- "UTC"
+        cat(" Timestamps have no timezone built-in, setting tz to UTC.\n")
+      } else {
+        tz <- timeZone
       }
-      if(!("POSIXct" %in% class(tDataRaw$DT))){
-        tDataRaw[, DT := as.POSIXct(format(DT, digits = 20, nsmall = 20), tz = tz)]
-      }
-    } else {
-      tz <- timeZone
+    }
+    
+    if(!("POSIXct" %in% class(tDataRaw$DT))){
+      tDataRaw[, DT := as.POSIXct(format(DT, 
+                                     digits = 20, 
+                                     nsmall = 20), 
+                              tz = tz)]
     }
     
     REPORT <- c(initialObservations = 0,
@@ -2353,7 +2460,6 @@ tradesCleanupUsingQuotes <- function(tradeDataSource = NULL, quoteDataSource = N
     dataDestination <- tradeDataSource
     dataDestination <- path.expand(dataDestination)
   }
-  
   if ((!is.null(tData)) & (!is.null(qData))) {
     #1 cleaning procedure that needs cleaned trades and quotes
     tData <- rmTradeOutliersUsingQuotes(tData, qData, lagQuotes = lagQuotes, nSpreads = nSpreads, BFM = BFM, backwardsWindow = backwardsWindow, forwardsWindow = forwardsWindow, plot = plot, onlyTQ = TRUE)
