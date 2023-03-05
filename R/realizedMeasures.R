@@ -1621,16 +1621,36 @@ rKernelCov <- function(rData, cor = FALSE,  alignBy = NULL, alignPeriod = NULL,
   } else { ## Actual calculations
     # # Aggregate:
     ## DO data transformations
-    if ((!is.null(alignBy)) && (!is.null(alignPeriod)) && makeReturns) {
-      rData <- fastTickAggregation(rData, alignBy = alignBy, alignPeriod = alignPeriod)
+    freq <- stringr::str_replace(units(index(xret)[2] - index(xret)[1]), 
+                                 "s$", 
+                                 "")
+    tzinfo <- attr(rData, "tzone")
+    if (!(freq %in% c("hour", "min"))) {
+      # makeReturn Flag is swapped for these two if statements.
+      if ((!is.null(alignBy)) && (!is.null(alignPeriod)) && !makeReturns) {
+        rData <- fastTickAggregation(rData, 
+                                     alignBy = alignBy, 
+                                     alignPeriod = alignPeriod,
+                                     tz = tzinfo)
+      }
+      if ((!is.null(alignBy)) && (!is.null(alignPeriod)) && makeReturns) {
+        rData <- fastTickAggregation_RETURNS(rData, 
+                                             alignBy = alignBy, 
+                                             alignPeriod = alignPeriod,
+                                             tz = tzinfo)
+      }
+      warning("
+              Data is recognised by system as TAQ data.
+              `alignBy` and `alignPeriod` are both not set, data is not aligned. 
+               It's recommended, if not must, to re-run with both being set.
+              "
+              )
     }
-    if ((!is.null(alignBy)) && (!is.null(alignPeriod)) && !makeReturns) {
-      rData <- fastTickAggregation_RETURNS(rData, alignBy = alignBy, alignPeriod = alignPeriod)
-    }
+
     if (makeReturns) {
       rData <- makeReturns(rData)
     }
-
+    
     if (is.null(dim(rData))) {
       n <- 1
     } else {
@@ -1649,7 +1669,11 @@ rKernelCov <- function(rData, cor = FALSE,  alignBy = NULL, alignPeriod = NULL,
                              ab2 = double(kernelParam + 1))
       
       if(!is.na(ans) && !is.null(ans) && ans<0){
-        warning("rKernelCov produced negative variance, try to change the kernelParam argument")
+        warning("
+                rKernelCov produced negative variance, 
+                try to change the kernelParam argument.
+                "
+                )
       }
       
       return(ans)
